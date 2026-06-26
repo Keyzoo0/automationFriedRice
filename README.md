@@ -264,6 +264,32 @@ atau       http://<IP_ESP32>
 
 ---
 
+## 🎛️ PID Tuning Guide
+
+### Default Parameters
+```
+Kp = 0.23   (proportional)
+Ki = 0.30   (integral, clamp ±200)
+Kd = 21.4   (derivative)
+baseFreq = (66 × SP) + 530
+```
+
+### Troubleshooting — Setpoint Overshoot
+
+Jika RPM aktual lebih tinggi dari setpoint (misal SP=20 → 22, SP=25 → 26):
+
+| Approach | Change | Effect |
+|----------|--------|--------|
+| Turunkan baseFreq slope | `base = (60 × SP) + 530` | Feedforward lebih rendah |
+| Turunkan baseFreq offset | `base = (66 × SP) + 450` | Offset lebih rendah |
+| Naikkan Kp | `Kp = 0.35` | Koreksi error lebih agresif |
+| Naikkan Ki | `Ki = 0.40` | Eliminasi steady-state error |
+| Turunkan Kd | `Kd = 15.0` | Kurang reaktif terhadap perubahan |
+
+> **Tip:** Tuning cukup dilakukan via web dashboard (`/api/pid?kp=...`) tanpa perlu upload ulang firmware. Coba kombinasi Kp=0.35, Ki=0.40, Kd=15.0 terlebih dahulu.
+
+---
+
 ## 🖥️ Web Dashboard
 
 Dashboard SPA 2 tab dengan auto-polling setiap 500ms.

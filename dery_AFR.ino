@@ -94,24 +94,33 @@ void postTransmission() {
 
 void startSystem() {
   Serial.println("[SYS] startSystem");
-  node.writeSingleRegister(REG_CMD, CMD_RUN);
+  uint8_t res = node.writeSingleRegister(REG_CMD, CMD_RUN);
+  bool mbOk = (res == node.ku8MBSuccess);
+  if (mbOk) {
+    node.writeSingleRegister(REG_FREQ, 1);
+  }
   digitalWrite(LED_PIN, HIGH);
   SYS_WRITE(is_running, true);
   SYS_WRITE(transition_run, true);
   SYS_WRITE(transition_start_ms, millis());
+  SYS_WRITE(modbus_ok, mbOk);
+  Serial.printf("[SYS] Modbus RUN: %s\n", mbOk ? "OK" : "FAIL");
 }
 
 void stopSystem() {
   Serial.println("[SYS] stopSystem");
+  bool mbOk = false;
   for (int i = 0; i < 3; i++) {
     uint8_t r = node.writeSingleRegister(REG_CMD, CMD_STOP);
-    if (r == node.ku8MBSuccess) break;
+    if (r == node.ku8MBSuccess) { mbOk = true; break; }
     delay(150);
   }
   node.writeSingleRegister(REG_FREQ, 0);
   digitalWrite(LED_PIN, LOW);
   SYS_WRITE(is_running, false);
   SYS_WRITE(transition_run, false);
+  SYS_WRITE(modbus_ok, mbOk);
+  Serial.printf("[SYS] Modbus STOP: %s\n", mbOk ? "OK" : "FAIL");
 }
 
 void showRPM(float rpm) {
@@ -410,6 +419,7 @@ void setup() {
   g_sys.setpoint = g_sys.sp_pos2;
   g_sys.is_running = false;
   g_sys.transition_run = false;
+  g_sys.modbus_ok = false;
 
   uint8_t nus[] = {0x54, 0x3E, 0x6D, 0x00};
   showDebugSegments("NVS loaded", blank, nus);
@@ -430,6 +440,10 @@ void setup() {
   node.begin(MODBUS_SLAVE, Serial2);
   node.preTransmission(preTransmission);
   node.postTransmission(postTransmission);
+
+  uint8_t res = node.writeSingleRegister(REG_FREQ, 0);
+  g_sys.modbus_ok = (res == node.ku8MBSuccess);
+  Serial.printf("[MODBUS] Init test: %s\n", g_sys.modbus_ok ? "OK" : "FAIL");
 
   uint8_t bus[] = {0x7C, 0x3E, 0x6D, 0x00};
   showDebugSegments("Modbus init", bus, dash);
