@@ -1,0 +1,18 @@
+.tab-btn {
+  transition: all 0.2s ease;
+}
+.tab-btn.active {
+  border-bottom-color: #10b981;
+  color: #34d399;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+}
+#statusLed.on {
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
