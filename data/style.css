@@ -1,30 +1,84 @@
-* { -webkit-tap-highlight-color: transparent; }
-
-.tab-btn {
-  transition: all 0.2s ease;
+* { 
+  -webkit-tap-highlight-color: transparent; 
+  box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Tab Navigation */
+.tab-btn { 
+  transition: all 0.2s ease; 
+  position: relative;
+}
+
+.tab-btn:hover {
+  background: rgba(52, 211, 153, 0.05);
+}
+
+.tab-btn.active {
+  color: #34d399;
+  border-bottom-color: #10b981;
+}
+
+/* Run LED Animation */
 .run-pulse {
   animation: pulseGlow 2s ease-in-out infinite;
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 8px rgba(52,211,153,0.4); }
-  50% { box-shadow: 0 0 20px rgba(52,211,153,0.7); }
+  0%, 100% { 
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.4);
+    transform: scale(1);
+  }
+  50% { 
+    box-shadow: 0 0 20px rgba(52, 211, 153, 0.7);
+    transform: scale(1.1);
+  }
 }
 
-input[type="number"] {
+/* Status LED Animation */
+.status-pulse {
+  animation: statusPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Number Input Styling */
+input[type="number"] { 
   -moz-appearance: textfield;
+  transition: all 0.2s ease;
+}
+
+input[type="number"]:focus {
+  outline: none;
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
 }
 
 input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button {
-  opacity: 0.5;
-  height: 24px;
+input[type="number"]::-webkit-outer-spin-button { 
+  opacity: 0.5; 
+  height: 24px; 
 }
 
+input[type="number"]:hover::-webkit-inner-spin-button,
+input[type="number"]:hover::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
+/* Chart Container */
 #rpmChart {
   max-height: 220px;
+  width: 100%;
 }
 
 @media (max-width: 640px) {
@@ -33,15 +87,178 @@ input[type="number"]::-webkit-outer-spin-button {
   }
 }
 
-::-webkit-scrollbar {
-  width: 4px;
+/* Custom Scrollbar */
+::-webkit-scrollbar { 
+  width: 6px;
+  height: 6px;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #334155;
+::-webkit-scrollbar-track { 
+  background: rgba(30, 41, 59, 0.5);
   border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb { 
+  background: #334155; 
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Button States */
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+/* Card Hover Effects */
+.bg-slate-800 {
+  transition: all 0.3s ease;
+}
+
+.bg-slate-800:hover {
+  border-color: rgba(52, 211, 153, 0.2);
+}
+
+/* Value Display Animations */
+#rpmVal, #setpointVal, #errorVal {
+  transition: all 0.3s ease;
+}
+
+/* Toast Notification */
+#toast {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Badge Styling */
+#modbusBadge {
+  transition: all 0.3s ease;
+}
+
+/* Input Focus States */
+input:focus {
+  outline: none;
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+}
+
+/* Responsive Grid Adjustments */
+@media (max-width: 768px) {
+  .grid-cols-2 {
+    grid-template-columns: 1fr;
+  }
+  
+  .grid-cols-3 {
+    grid-template-columns: 1fr;
+  }
+  
+  .grid-cols-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Loading State */
+.loading {
+  position: relative;
+  pointer-events: none;
+}
+
+.loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border: 2px solid rgba(52, 211, 153, 0.3);
+  border-top-color: #10b981;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Error State */
+.error-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+
+/* Success State */
+.success-flash {
+  animation: flash 0.6s ease-out;
+}
+
+@keyframes flash {
+  0% { background-color: rgba(16, 185, 129, 0.3); }
+  100% { background-color: transparent; }
+}
+
+/* Chart Legend Custom */
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-legend-color {
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/* Status Text Transitions */
+#statusText {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Uptime Display */
+#uptimeVal {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Heap Display */
+#heapVal {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Print Styles */
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+  
+  .bg-slate-800, .bg-slate-900 {
+    background: white;
+    border: 1px solid #ccc;
+  }
+  
+  button {
+    display: none;
+  }
 }

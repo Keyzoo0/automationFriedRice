@@ -1,199 +1,121 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AFR — Automation Frice Ride</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AFR - Automation Frice Ride</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-  <link rel="stylesheet" href="style.css" />
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            surface: '#0f172a',
-            card: '#1e293b',
-            border: '#334155',
-            muted: '#94a3b8',
-          }
-        }
-      }
-    }
-  </script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="style.css">
 </head>
-<body class="bg-surface text-white min-h-screen font-sans antialiased">
-
-  <!-- HEADER -->
-  <header class="bg-card border-b border-border px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 z-50">
-    <div class="w-3 h-3 rounded-full transition-colors duration-500" id="statusLed"></div>
-    <h1 class="text-lg sm:text-xl font-bold tracking-tight">AFR</h1>
-    <span class="text-[10px] text-muted ml-2 hidden sm:inline">Automation Frice Ride</span>
-    <div class="ml-auto flex items-center gap-3">
-      <span class="text-[10px] px-2 py-0.5 rounded-full font-medium transition-colors duration-300" id="modbusBadge">Modbus: --</span>
-      <span class="text-[10px] text-muted">v1.0</span>
+<body class="bg-slate-900 text-slate-200 min-h-screen font-sans p-4 max-w-4xl mx-auto">
+  
+  <header class="flex justify-between items-center mb-6 border-b border-slate-700 pb-4">
+    <div>
+      <h1 class="text-2xl font-bold text-emerald-400">AFR</h1>
+      <p class="text-xs text-slate-400">Automation Frice Ride v1.0</p>
+    </div>
+    <div id="modbusBadge" class="text-[10px] px-2 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-slate-700">
+      Modbus: --
     </div>
   </header>
 
-  <!-- TAB NAV -->
-  <nav class="flex border-b border-border px-4 sm:px-6 bg-card/50 backdrop-blur sticky top-[52px] z-40">
-    <button class="tab-btn px-4 py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-all duration-200" data-tab="dashboard">📊 Dashboard</button>
-    <button class="tab-btn px-4 py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-all duration-200 text-muted border-transparent hover:text-white" data-tab="info">📋 Info</button>
-  </nav>
+  <div class="flex border-b border-slate-700 mb-6 overflow-x-auto">
+    <button class="tab-btn text-emerald-400 border-b-2 border-emerald-500 px-4 py-2 text-sm font-medium whitespace-nowrap" data-tab="dashboard">📊 Dashboard</button>
+    <button class="tab-btn text-muted border-b-2 border-transparent px-4 py-2 text-sm font-medium whitespace-nowrap" data-tab="info">📋 Info System</button>
+  </div>
 
-  <main class="p-3 sm:p-6 max-w-7xl mx-auto">
-
-    <!-- ═══ DASHBOARD ═══ -->
-    <div id="tab-dashboard" class="tab-content">
-
-      <!-- TOP ROW: Status Mega Card -->
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-5 mb-3 sm:mb-5">
-        <div class="lg:col-span-2 bg-card rounded-2xl p-4 sm:p-6 border border-border">
-          <div class="flex items-start justify-between mb-3">
-            <span class="text-[10px] text-muted uppercase tracking-widest font-medium">System Status</span>
-            <div class="flex gap-2">
-              <button id="btnStart" class="px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed bg-emerald-600 hover:bg-emerald-500 active:scale-95 shadow-lg shadow-emerald-900/30">▶ Start</button>
-              <button id="btnStop" class="px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed bg-red-600 hover:bg-red-500 active:scale-95 shadow-lg shadow-red-900/30">■ Stop</button>
-            </div>
-          </div>
-          <div class="flex items-center gap-4 mb-4">
-            <div class="w-5 h-5 rounded-full transition-all duration-500 shadow-lg" id="runLed"></div>
-            <span class="text-3xl sm:text-4xl font-bold tracking-tight transition-colors duration-300" id="statusText">STOP</span>
-          </div>
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div class="bg-surface/50 rounded-xl p-3">
-              <div class="text-[10px] text-muted uppercase tracking-wider mb-1">Setpoint</div>
-              <div class="text-2xl sm:text-3xl font-bold text-emerald-400" id="setpointVal">--</div>
-              <div class="text-[10px] text-muted mt-0.5">RPM</div>
-            </div>
-            <div class="bg-surface/50 rounded-xl p-3">
-              <div class="text-[10px] text-muted uppercase tracking-wider mb-1">Actual RPM</div>
-              <div class="text-2xl sm:text-3xl font-bold text-sky-400" id="rpmVal">--</div>
-              <div class="text-[10px] text-muted mt-0.5">current</div>
-            </div>
-            <div class="bg-surface/50 rounded-xl p-3">
-              <div class="text-[10px] text-muted uppercase tracking-wider mb-1">Error</div>
-              <div class="text-2xl sm:text-3xl font-bold text-amber-400" id="errorVal">--</div>
-              <div class="text-[10px] text-muted mt-0.5">RPM</div>
-            </div>
-            <div class="bg-surface/50 rounded-xl p-3">
-              <div class="text-[10px] text-muted uppercase tracking-wider mb-1">PID Out</div>
-              <div class="text-xl sm:text-2xl font-bold text-violet-400" id="pidOutVal">--</div>
-              <div class="text-[10px] text-muted mt-0.5">freq raw</div>
-            </div>
-          </div>
+  <div id="tab-dashboard" class="tab-content space-y-6">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 flex flex-col items-center justify-center">
+        <div class="flex items-center gap-2 mb-2">
+          <div id="runLed" class="w-5 h-5 rounded-full bg-gray-600"></div>
+          <div id="statusLed" class="w-3 h-3 rounded-full bg-gray-600"></div>
+          <span class="text-xs text-slate-400 uppercase tracking-wider">Status</span>
         </div>
-
-        <div class="bg-card rounded-2xl p-4 sm:p-5 border border-border">
-          <span class="text-[10px] text-muted uppercase tracking-widest font-medium block mb-3">Quick Tune</span>
-          <div class="space-y-2.5">
-            <div>
-              <label class="text-[11px] text-muted block mb-0.5">Kp</label>
-              <input type="number" step="0.01" id="pidKp" class="w-full bg-surface border border-border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors" />
-            </div>
-            <div>
-              <label class="text-[11px] text-muted block mb-0.5">Ki</label>
-              <input type="number" step="0.01" id="pidKi" class="w-full bg-surface border border-border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors" />
-            </div>
-            <div>
-              <label class="text-[11px] text-muted block mb-0.5">Kd</label>
-              <input type="number" step="0.1" id="pidKd" class="w-full bg-surface border border-border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors" />
-            </div>
-            <button id="btnApplyPID" class="w-full bg-emerald-700 hover:bg-emerald-600 text-xs font-bold py-2 rounded-lg transition-all active:scale-95 shadow-lg shadow-emerald-900/20">Apply PID</button>
-          </div>
-        </div>
+        <div id="statusText" class="text-3xl font-bold text-gray-500">STOP</div>
       </div>
-
-      <!-- BOTTOM ROW: Chart + Setpoints -->
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-5">
-
-        <!-- Chart -->
-        <div class="lg:col-span-2 bg-card rounded-2xl p-4 sm:p-5 border border-border">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-[10px] text-muted uppercase tracking-widest font-medium">RPM Real-Time</span>
-            <span class="text-[10px] text-muted" id="chartStatus">30s window</span>
-          </div>
-          <div class="relative">
-            <canvas id="rpmChart" height="200" class="w-full"></canvas>
-          </div>
-        </div>
-
-        <!-- Setpoints -->
-        <div class="bg-card rounded-2xl p-4 sm:p-5 border border-border">
-          <span class="text-[10px] text-muted uppercase tracking-widest font-medium block mb-3">Setpoint Positions</span>
-          <div class="space-y-2.5">
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-muted w-16 shrink-0">Pos 1</span>
-              <span class="text-[10px] text-muted">SP30</span>
-              <input type="number" step="0.1" class="sp-input flex-1 bg-surface border border-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors w-0" data-pos="1" />
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-muted w-16 shrink-0">Pos 2</span>
-              <span class="text-[10px] text-muted">SP25</span>
-              <input type="number" step="0.1" class="sp-input flex-1 bg-surface border border-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors w-0" data-pos="2" />
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-muted w-16 shrink-0">Pos 3</span>
-              <span class="text-[10px] text-muted">SP20</span>
-              <input type="number" step="0.1" class="sp-input flex-1 bg-surface border border-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors w-0" data-pos="3" />
-            </div>
-            <button id="btnSaveSP" class="w-full bg-emerald-700 hover:bg-emerald-600 text-xs font-bold py-2 rounded-lg transition-all active:scale-95 shadow-lg shadow-emerald-900/20 mt-1">Save</button>
-          </div>
-
-          <hr class="border-border my-4" />
-
-          <div class="space-y-1.5 text-[11px]">
-            <div class="flex justify-between">
-              <span class="text-muted">Uptime</span>
-              <span id="uptimeVal">0s</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-muted">VFD Freq</span>
-              <span id="vfdFreqVal">0</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-muted">Free Heap</span>
-              <span id="heapVal">--</span>
-            </div>
-          </div>
-        </div>
+      <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 flex flex-col items-center justify-center">
+        <span class="text-xs text-slate-400 uppercase tracking-wider mb-1">Setpoint</span>
+        <div class="text-2xl font-bold text-emerald-400"><span id="setpointVal">--</span> <span class="text-sm text-slate-500">RPM</span></div>
+      </div>
+      <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 flex flex-col items-center justify-center">
+        <span class="text-xs text-slate-400 uppercase tracking-wider mb-1">Actual RPM</span>
+        <div class="text-2xl font-bold text-blue-400"><span id="rpmVal">--</span></div>
+      </div>
+      <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 flex flex-col items-center justify-center">
+        <span class="text-xs text-slate-400 uppercase tracking-wider mb-1">Error</span>
+        <div id="errorVal" class="text-2xl font-bold text-gray-500">--</div>
       </div>
     </div>
 
-    <!-- ═══ INFO ═══ -->
-    <div id="tab-info" class="tab-content hidden">
-      <div class="max-w-xl mx-auto bg-card rounded-2xl p-6 sm:p-10 border border-border text-center">
-        <div class="w-12 h-12 rounded-full bg-emerald-900/50 flex items-center justify-center mx-auto mb-6">
-          <span class="text-2xl">⚙️</span>
-        </div>
-        <h2 class="text-lg sm:text-xl font-bold leading-snug mb-2">IMPLEMENTASI KONTROL KECEPATAN MOTOR PADA PENGADUKAN BLONDO DALAM PEMBUATAN MINYAK GORENG KELAPA BERBASIS PID</h2>
-        <div class="text-[10px] text-muted uppercase tracking-widest mt-4 mb-6">Proyek Akhir</div>
-
-        <div class="space-y-1 mb-6">
-          <p class="text-base font-semibold">Dery Adinur Saputro</p>
-          <p class="text-sm text-muted">2241170126</p>
-        </div>
-
-        <div class="text-xs text-muted space-y-0.5 mb-6">
-          <p>Program Studi Sarjana Terapan Teknik Elektronika</p>
-          <p>Jurusan Teknik Elektro</p>
-          <p>Politeknik Negeri Malang</p>
-          <p>2026</p>
-        </div>
-
-        <div class="border-t border-border pt-5 text-xs space-y-1">
-          <p><span class="text-muted">Pembimbing 1:</span> Dr. Beauty Anggraheny Ikawanty, S.T., M.T.</p>
-          <p class="text-[10px] text-muted/60">NIP 198110312009122001</p>
-          <p class="mt-3"><span class="text-muted">Pembimbing 2:</span> Irfin Sandra Asti, S.S.T., M.T</p>
-          <p class="text-[10px] text-muted/60">NIP 199506272024062003</p>
-        </div>
+    <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-sm font-semibold text-slate-300">RPM Real-Time</h2>
+        <span id="chartStatus" class="text-xs text-slate-500">180s window</span>
+      </div>
+      <div class="relative" style="height: 220px;">
+        <canvas id="rpmChart"></canvas>
       </div>
     </div>
 
-  </main>
+    <div class="grid grid-cols-2 gap-4">
+      <button id="btnStart" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-xl shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+        <span class="text-xl">▶</span> Start
+      </button>
+      <button id="btnStop" class="bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+        <span class="text-xl">■</span> Stop
+      </button>
+    </div>
 
-  <!-- TOAST -->
-  <div id="toast" class="fixed bottom-4 right-4 bg-card border border-border rounded-xl px-4 py-3 shadow-2xl text-xs transition-all duration-300 translate-y-20 opacity-0 z-50 max-w-xs"></div>
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="bg-slate-800 rounded-xl p-5 border border-slate-700">
+        <h3 class="text-sm font-semibold text-slate-300 mb-4">⚙️ Quick Tune PID</h3>
+        <div class="grid grid-cols-3 gap-3 mb-4">
+          <div><label class="text-xs text-slate-400">Kp</label><input id="pidKp" type="number" step="0.01" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-emerald-500"></div>
+          <div><label class="text-xs text-slate-400">Ki</label><input id="pidKi" type="number" step="0.01" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-emerald-500"></div>
+          <div><label class="text-xs text-slate-400">Kd</label><input id="pidKd" type="number" step="0.1" class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-emerald-500"></div>
+        </div>
+        <button id="btnApplyPID" class="w-full bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 rounded-lg transition">Apply PID</button>
+      </div>
+
+      <div class="bg-slate-800 rounded-xl p-5 border border-slate-700">
+        <h3 class="text-sm font-semibold text-slate-300 mb-4">🎯 Setpoint Positions</h3>
+        <div class="space-y-3 mb-4">
+          <div class="flex items-center gap-3"><span class="text-xs text-slate-400 w-12">Pos 1</span><input data-pos="1" class="sp-input w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-emerald-500" type="number" step="0.1"></div>
+          <div class="flex items-center gap-3"><span class="text-xs text-slate-400 w-12">Pos 2</span><input data-pos="2" class="sp-input w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-emerald-500" type="number" step="0.1"></div>
+          <div class="flex items-center gap-3"><span class="text-xs text-slate-400 w-12">Pos 3</span><input data-pos="3" class="sp-input w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-emerald-500" type="number" step="0.1"></div>
+        </div>
+        <button id="btnSaveSP" class="w-full bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 rounded-lg transition">Save Positions</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-4 text-center bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+      <div><div class="text-xs text-slate-500">Uptime</div><div id="uptimeVal" class="text-sm font-mono text-slate-300">0s</div></div>
+      <div><div class="text-xs text-slate-500">PID Output</div><div id="pidOutVal" class="text-sm font-mono text-slate-300">0</div></div>
+      <div><div class="text-xs text-slate-500">VFD Freq</div><div id="vfdFreqVal" class="text-sm font-mono text-slate-300">0</div></div>
+      <div><div class="text-xs text-slate-500">Free Heap</div><div id="heapVal" class="text-sm font-mono text-slate-300">--</div></div>
+    </div>
+  </div>
+
+  <div id="tab-info" class="tab-content hidden space-y-4">
+    <div class="bg-slate-800 rounded-xl p-6 border border-slate-700">
+      <h2 class="text-lg font-bold text-emerald-400 mb-4">IMPLEMENTASI KONTROL KECEPATAN MOTOR</h2>
+      <p class="text-sm text-slate-300 mb-2">PADA PENGADUKAN BLONDO DALAM PEMBUATAN MINYAK GORENG KELAPA BERBASIS PID</p>
+      <hr class="border-slate-700 my-4">
+      <div class="text-sm text-slate-400 space-y-1">
+        <p><strong class="text-slate-200">Proyek Akhir</strong></p>
+        <p>Dery Adinur Saputro (2241170126)</p>
+        <p>Program Studi Sarjana Terapan Teknik Elektronika</p>
+        <p>Jurusan Teknik Elektro, Politeknik Negeri Malang (2026)</p>
+        <hr class="border-slate-700 my-4">
+        <p><strong class="text-slate-200">Pembimbing 1:</strong> Dr. Beauty Anggraheny Ikawanty, S.T., M.T.</p>
+        <p><strong class="text-slate-200">Pembimbing 2:</strong> Irfin Sandra Asti, S.S.T., M.T</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="fixed bottom-4 right-4 border rounded-xl px-4 py-3 shadow-2xl text-xs transition-all duration-300 z-50 max-w-xs translate-y-20 opacity-0"></div>
 
   <script src="app.js"></script>
 </body>

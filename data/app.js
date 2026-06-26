@@ -1,13 +1,34 @@
 const HOST = location.hostname;
 const POLL_MS = 500;
-const MAX_POINTS = 60;
-const RECONNECT_DELAY = 2000;
-
+const MAX_POINTS = 360; // 360 * 500ms = 180 Detik (3 Menit)
 let chart = null;
 let fetchFailCount = 0;
 let lastStatus = null;
 
-// ─── Toast ────────────────────────────────────────────────
+// ── BUG FIX: Track input yang sedang diedit ──
+// Jika user sedang fokus di input, populateInputs() TIDAK akan menimpa nilainya.
+const dirtyInputs = new Set();
+
+function markDirty(id) { dirtyInputs.add(id); }
+function clearDirty(id) { dirtyInputs.delete(id); }
+
+// Pasang listener ke semua input agar tidak ter-replace saat diketik
+function setupDirtyTracking() {
+  const ids = ['pidKp', 'pidKi', 'pidKd'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('focus', () => markDirty(id));
+    el.addEventListener('blur',  () => clearDirty(id));
+  });
+
+  document.querySelectorAll('.sp-input').forEach(inp => {
+    const key = 'sp_pos' + inp.dataset.pos;
+    inp.addEventListener('focus', () => markDirty(key));
+    inp.addEventListener('blur',  () => clearDirty(key));
+  });
+}
+
 function toast(msg, ok = true) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -21,7 +42,6 @@ function toast(msg, ok = true) {
   }, 3000);
 }
 
-// ─── Chart ─────────────────────────────────────────────────
 function initChart() {
   const ctx = document.getElementById('rpmChart');
   if (!ctx) return;
@@ -29,21 +49,33 @@ function initChart() {
     type: 'line',
     data: {
       labels: [],
-      datasets: [{
-        label: 'RPM',
-        data: [],
-        borderColor: '#34d399',
-        backgroundColor: (ctx) => {
-          const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, ctx.chart.height);
-          g.addColorStop(0, 'rgba(52,211,153,0.25)');
-          g.addColorStop(1, 'rgba(52,211,153,0.01)');
-          return g;
+      datasets: [
+        {
+          label: 'Actual RPM',
+          data: [],
+          borderColor: '#34d399',
+          backgroundColor: (ctx) => {
+            const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, ctx.chart.height);
+            g.addColorStop(0, 'rgba(52,211,153,0.25)');
+            g.addColorStop(1, 'rgba(52,211,153,0.01)');
+            return g;
+          },
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          borderWidth: 2,
         },
-        fill: true,
-        tension: 0.4,
-        pointRadius: 0,
-        borderWidth: 2,
-      }]
+        {
+          label: 'Setpoint',
+          data: [],
+          borderColor: '#f87171',
+          borderDash: [5, 5],
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0
+        }
+      ]
     },
     options: {
       responsive: true,
@@ -61,7 +93,7 @@ function initChart() {
           padding: 8,
           bodyFont: { size: 12 },
           callbacks: {
-            label: ctx => `${ctx.parsed.y.toFixed(1)} RPM`
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} RPM`
           }
         }
       },
@@ -82,19 +114,20 @@ function initChart() {
   });
 }
 
-function addChartPoint(value) {
+function addChartPoint(rpm, setpoint) {
   if (!chart) return;
   const t = new Date();
   chart.data.labels.push(t.getSeconds() + 's');
-  chart.data.datasets[0].data.push(Math.round(value * 10) / 10);
+  chart.data.datasets[0].data.push(Math.round(rpm * 10) / 10);
+  chart.data.datasets[1].data.push(Math.round(setpoint * 10) / 10);
   if (chart.data.labels.length > MAX_POINTS) {
     chart.data.labels.shift();
     chart.data.datasets[0].data.shift();
+    chart.data.datasets[1].data.shift();
   }
   chart.update('none');
 }
 
-// ─── Tab Navigation ───────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach(b => {
@@ -109,7 +142,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
-// ─── API fetch with timeout ───────────────────────────────
 async function apiFetch(url) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 3000);
@@ -124,15 +156,14 @@ async function apiFetch(url) {
   }
 }
 
-// ─── Poll Status ──────────────────────────────────────────
 async function fetchStatus() {
   try {
     const d = await apiFetch('/api/status');
     fetchFailCount = 0;
-    if (JSON.stringify(d) !== JSON.stringify(lastStatus)) {
-      lastStatus = d;
-      updateDashboard(d);
-    }
+    lastStatus = d;
+    updateDashboard(d);
+    populateInputs(d);     // sudah aman karena cek dirtyInputs di dalam
+    return d;
   } catch (e) {
     fetchFailCount++;
     const statusText = document.getElementById('statusText');
@@ -142,33 +173,31 @@ async function fetchStatus() {
       statusText.textContent = 'OFFLINE';
       statusText.className = 'text-3xl sm:text-4xl font-bold tracking-tight text-red-400';
       runLed.className = 'w-5 h-5 rounded-full bg-red-500';
-      statusLed.className = 'w-3 h-3 rounded-full bg-red-500';
+      if (statusLed) statusLed.className = 'w-3 h-3 rounded-full bg-red-500';
     }
+    return null;
   }
 }
 
-// ─── Update Dashboard ─────────────────────────────────────
 function updateDashboard(d) {
   const running = d.is_running;
   const sp = d.setpoint || 0;
   const rpm = d.current_rpm || 0;
   const error = sp - rpm;
 
-  // Status text
   const st = document.getElementById('statusText');
   st.textContent = running ? 'RUN' : 'STOP';
   st.className = `text-3xl sm:text-4xl font-bold tracking-tight transition-colors duration-300 ${running ? 'text-emerald-400' : 'text-gray-500'}`;
 
-  // LEDs
   const runLed = document.getElementById('runLed');
   runLed.className = `w-5 h-5 rounded-full transition-all duration-500 shadow-lg ${running ? 'bg-emerald-400 shadow-emerald-500/50 run-pulse' : 'bg-gray-600'}`;
 
   const statusLed = document.getElementById('statusLed');
   statusLed.className = `w-3 h-3 rounded-full transition-colors duration-500 ${running ? 'bg-emerald-400' : 'bg-gray-600'}`;
 
-  // Metrics
   document.getElementById('setpointVal').textContent = sp.toFixed(1);
   document.getElementById('rpmVal').textContent = rpm.toFixed(1);
+
   const errEl = document.getElementById('errorVal');
   const errAbs = Math.abs(error);
   errEl.textContent = (error >= 0 ? '+' : '') + error.toFixed(1);
@@ -177,7 +206,6 @@ function updateDashboard(d) {
   document.getElementById('pidOutVal').textContent = (d.pid_output || 0).toFixed(0);
   document.getElementById('vfdFreqVal').textContent = d.vfd_freq_raw || 0;
 
-  // Modbus
   const mb = document.getElementById('modbusBadge');
   if (d.modbus_ok) {
     mb.textContent = 'Modbus: OK';
@@ -187,28 +215,8 @@ function updateDashboard(d) {
     mb.className = 'text-[10px] px-2 py-0.5 rounded-full font-medium bg-red-900/60 text-red-300 border border-red-800/50';
   }
 
-  // Chart
-  addChartPoint(rpm);
+  addChartPoint(rpm, sp);
 
-  // PID fields (only if not focused)
-  ['pidKp', 'pidKi', 'pidKd'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el && document.activeElement !== el) {
-      const key = id.replace('pid', '').toLowerCase();
-      el.value = (d[key] || 0).toFixed(id === 'pidKd' ? 1 : 2);
-    }
-  });
-
-  // SP fields (only if not focused)
-  document.querySelectorAll('.sp-input').forEach(inp => {
-    if (document.activeElement !== inp) {
-      const pos = inp.dataset.pos;
-      const key = 'sp_pos' + pos;
-      inp.value = (d[key] || 0).toFixed(1);
-    }
-  });
-
-  // Uptime
   const ms = d.uptime_ms || 0;
   const sec = Math.floor(ms / 1000);
   const min = Math.floor(sec / 60);
@@ -217,25 +225,38 @@ function updateDashboard(d) {
     hr > 0 ? `${hr}h ${min % 60}m` :
     min > 0 ? `${min}m ${sec % 60}s` :
     `${sec}s`;
-
   document.getElementById('heapVal').textContent = d.heap || '--';
   document.getElementById('chartStatus').textContent = `${Math.round(chart?.data?.labels?.length * POLL_MS / 1000 || 0)}s window`;
 
-  // Buttons
   document.getElementById('btnStart').disabled = running;
   document.getElementById('btnStop').disabled = !running;
-
-  // Offline recovery
-  if (fetchFailCount > 0) fetchFailCount = 0;
 }
 
-// ─── Control Handlers ─────────────────────────────────────
+// ── BUG FIX: Hanya update input yang TIDAK sedang diedit ──
+function populateInputs(d) {
+  // PID inputs
+  [['pidKp','kp',2], ['pidKi','ki',2], ['pidKd','kd',1]].forEach(([id, key, dec]) => {
+    if (dirtyInputs.has(id)) return;  // skip jika user sedang mengetik
+    const el = document.getElementById(id);
+    if (el) el.value = (d[key] || 0).toFixed(dec);
+  });
+
+  // Setpoint inputs
+  document.querySelectorAll('.sp-input').forEach(inp => {
+    const key = 'sp_pos' + inp.dataset.pos;
+    if (dirtyInputs.has(key)) return;  // skip jika user sedang mengetik
+    inp.value = (d[key] || 0).toFixed(1);
+  });
+}
+
 async function sendCmd(url, okMsg, failMsg) {
   try {
-    await apiFetch(url);
+    const data = await apiFetch(url);
     toast(okMsg);
+    return data;
   } catch (e) {
     toast(failMsg || 'Request failed', false);
+    return null;
   }
 }
 
@@ -247,25 +268,47 @@ document.getElementById('btnStop').addEventListener('click', () => {
   sendCmd('/api/stop', 'Motor stopped', 'Stop failed');
 });
 
-document.getElementById('btnApplyPID').addEventListener('click', () => {
+document.getElementById('btnApplyPID').addEventListener('click', async () => {
   const kp = document.getElementById('pidKp').value;
   const ki = document.getElementById('pidKi').value;
   const kd = document.getElementById('pidKd').value;
-  sendCmd(`/api/pid?kp=${kp}&ki=${ki}&kd=${kd}`, 'PID updated', 'PID failed');
+  const data = await sendCmd(`/api/pid?kp=${kp}&ki=${ki}&kd=${kd}`, 'PID updated', 'PID failed');
+  if (data && data.status === 'ok') {
+    // Setelah apply berhasil, update dengan nilai konfirmasi dari server
+    clearDirty('pidKp'); clearDirty('pidKi'); clearDirty('pidKd');
+    document.getElementById('pidKp').value = data.kp.toFixed(2);
+    document.getElementById('pidKi').value = data.ki.toFixed(2);
+    document.getElementById('pidKd').value = data.kd.toFixed(1);
+  }
 });
 
-document.getElementById('btnSaveSP').addEventListener('click', () => {
+document.getElementById('btnSaveSP').addEventListener('click', async () => {
   let count = 0;
+  const promises = [];
   document.querySelectorAll('.sp-input').forEach(inp => {
     const pos = inp.dataset.pos;
-    const val = inp.value;
-    fetch(`/api/setpoint?pos=${pos}&value=${val}`);
-    count++;
+    let val = parseFloat(inp.value);
+    if (isNaN(val)) val = 10;
+    if (val < 10) val = 10;
+    if (val > 100) val = 100;  // BUG FIX: sinkron dengan firmware (max 100 RPM)
+    inp.value = val.toFixed(1);
+    promises.push(
+      apiFetch(`/api/setpoint?pos=${pos}&value=${val}`)
+        .then(data => {
+          if (data.status === 'ok') {
+            count++;
+            clearDirty('sp_pos' + pos);  // clear dirty setelah save berhasil
+          }
+        })
+        .catch(() => {})
+    );
   });
+  await Promise.allSettled(promises);
   toast(`${count} setpoints saved`);
 });
 
-// ─── Init ─────────────────────────────────────────────────
+// Init
+setupDirtyTracking();
 initChart();
-setInterval(fetchStatus, POLL_MS);
 fetchStatus();
+setInterval(fetchStatus, POLL_MS);

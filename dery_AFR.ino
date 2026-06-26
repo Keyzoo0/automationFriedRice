@@ -40,45 +40,65 @@
 #define KI_DEF   0.30f
 #define KD_DEF   21.4f
 
+// ==================== RPM CONFIG ====================
+#define PULSE_PER_REV  5
+#define MAX_RPM         100.0f
+#define RPM_SPIKE_CEIL (MAX_RPM * 1.5f)
+#define RPM_EMA_ALPHA   0.02f
+#define RPM_TIMEOUT_US  2000000
+
+// ==================== PID CONFIG ====================
+// BUG FIX #4: Integral windup limit disesuaikan.
+// Maks output = 5000. Base pada SP=30 sudah ~2500.
+// Sisa untuk integral = 2500. Margin ±500 cukup untuk koreksi.
+#define PID_INTEGRAL_MAX   500.0f
+#define PID_INTEGRAL_MIN  -500.0f
+
+// BUG FIX #1: Deadband — jika |error| < nilai ini, integral BERHENTI akumulasi.
+// Mencegah integral terus naik setelah setpoint tercapai.
+#define PID_DEADBAND_RPM   0.1f
+
 AsyncWebServer server(80);
 ModbusMaster node;
 TM1637Display dispAtas(TM1637_ATAS_CLK, TM1637_ATAS_DIO);
 TM1637Display dispBawah(TM1637_BAWAH_CLK, TM1637_BAWAH_DIO);
 
 struct SharedState {
-  float  current_rpm;
-  float  raw_rpm;
-  float  setpoint;
-  float  sp_pos1;
-  float  sp_pos2;
-  float  sp_pos3;
-  float  kp, ki, kd;
-  float  pid_output;
-  bool   modbus_ok;
+  float    current_rpm;
+  float    raw_rpm;
+  float    setpoint;
+  float    sp_pos1, sp_pos2, sp_pos3;
+  float    kp, ki, kd;
+  float    pid_output;
+  bool     modbus_ok;
   uint16_t vfd_freq_raw;
-  bool   is_running;
-  bool   transition_run;
+  bool     is_running;
+  bool     transition_run;
   uint32_t transition_start_ms;
   uint32_t uptime_ms;
+  // BUG FIX #5: Flag untuk PID reset integral saat restart
+  bool     pid_reset_req;
 };
 
 SharedState g_sys;
 SemaphoreHandle_t xMutex;
+SemaphoreHandle_t xMutexModbus;
 
 #define SYS_READ(field)  ({ xSemaphoreTake(xMutex,portMAX_DELAY); auto _v=g_sys.field; xSemaphoreGive(xMutex); _v; })
 #define SYS_WRITE(f,v)   { xSemaphoreTake(xMutex,portMAX_DELAY); g_sys.f=(v); xSemaphoreGive(xMutex); }
 
-volatile unsigned long lastPulseMicros = 0;
-volatile unsigned long intervalValid = 0;
-volatile bool adaPulsa = false;
+// ==================== ISR DATA ====================
+static volatile unsigned long lastPulseMicros = 0;
+static volatile unsigned long intervalValid   = 0;
+static volatile bool          adaPulsa        = false;
 
 void IRAM_ATTR readRPM() {
-  unsigned long now = micros();
+  unsigned long now  = micros();
   unsigned long diff = now - lastPulseMicros;
   if (diff > 300000) {
-    intervalValid = diff;
+    intervalValid  = diff;
     lastPulseMicros = now;
-    adaPulsa = true;
+    adaPulsa       = true;
   }
 }
 
@@ -88,22 +108,30 @@ void preTransmission() {
 
 void postTransmission() {
   Serial2.flush();
-  delayMicroseconds(200);
+  delay(2);
   digitalWrite(MAX485_DE_RE, LOW);
+}
+
+uint8_t modbusWriteRegister(uint16_t reg, uint16_t val) {
+  xSemaphoreTake(xMutexModbus, portMAX_DELAY);
+  uint8_t res = node.writeSingleRegister(reg, val);
+  xSemaphoreGive(xMutexModbus);
+  return res;
 }
 
 void startSystem() {
   Serial.println("[SYS] startSystem");
-  uint8_t res = node.writeSingleRegister(REG_CMD, CMD_RUN);
+  uint8_t res = modbusWriteRegister(REG_CMD, CMD_RUN);
   bool mbOk = (res == node.ku8MBSuccess);
-  if (mbOk) {
-    node.writeSingleRegister(REG_FREQ, 1);
-  }
+  if (mbOk) modbusWriteRegister(REG_FREQ, 1);
   digitalWrite(LED_PIN, HIGH);
-  SYS_WRITE(is_running, true);
-  SYS_WRITE(transition_run, true);
-  SYS_WRITE(transition_start_ms, millis());
-  SYS_WRITE(modbus_ok, mbOk);
+  xSemaphoreTake(xMutex, portMAX_DELAY);
+  g_sys.is_running          = true;
+  g_sys.transition_run      = true;
+  g_sys.transition_start_ms = millis();
+  g_sys.modbus_ok           = mbOk;
+  g_sys.pid_reset_req       = true;   // BUG FIX #5: minta PID reset integral
+  xSemaphoreGive(xMutex);
   Serial.printf("[SYS] Modbus RUN: %s\n", mbOk ? "OK" : "FAIL");
 }
 
@@ -111,15 +139,18 @@ void stopSystem() {
   Serial.println("[SYS] stopSystem");
   bool mbOk = false;
   for (int i = 0; i < 3; i++) {
-    uint8_t r = node.writeSingleRegister(REG_CMD, CMD_STOP);
+    uint8_t r = modbusWriteRegister(REG_CMD, CMD_STOP);
     if (r == node.ku8MBSuccess) { mbOk = true; break; }
     delay(150);
   }
-  node.writeSingleRegister(REG_FREQ, 0);
+  modbusWriteRegister(REG_FREQ, 0);
   digitalWrite(LED_PIN, LOW);
-  SYS_WRITE(is_running, false);
-  SYS_WRITE(transition_run, false);
-  SYS_WRITE(modbus_ok, mbOk);
+  xSemaphoreTake(xMutex, portMAX_DELAY);
+  g_sys.is_running     = false;
+  g_sys.transition_run = false;
+  g_sys.modbus_ok      = mbOk;
+  g_sys.pid_reset_req  = true;   // BUG FIX #5: reset juga saat stop
+  xSemaphoreGive(xMutex);
   Serial.printf("[SYS] Modbus STOP: %s\n", mbOk ? "OK" : "FAIL");
 }
 
@@ -129,9 +160,9 @@ void showRPM(float rpm) {
     dispBawah.setSegments(blank);
     return;
   }
-  int intPart = (int)rpm;
+  int intPart  = (int)rpm;
   int decDigit = (int)(rpm * 10) % 10;
-  int tens = intPart / 10;
+  int tens  = intPart / 10;
   int units = intPart % 10;
   uint8_t segs[4];
   segs[0] = tens > 0 ? dispBawah.encodeDigit(tens) : 0x00;
@@ -152,17 +183,14 @@ void updateDisplays() {
     dispAtas.setSegments(run);
     showRPM(snap.current_rpm);
   } else if (snap.is_running) {
-    if (snap.transition_run) {
-      SYS_WRITE(transition_run, false);
-    }
+    if (snap.transition_run) SYS_WRITE(transition_run, false);
     dispAtas.showNumberDec((int)snap.setpoint, false, 4, 0);
     showRPM(snap.current_rpm);
   } else {
     uint8_t stop[] = {0x6D, 0x78, 0x3F, 0x73};
     dispAtas.setSegments(stop);
     uint8_t d[4];
-    d[0] = 0x6D;
-    d[1] = 0x73;
+    d[0] = 0x6D; d[1] = 0x73;
     int sp = (int)snap.setpoint;
     d[2] = dispBawah.encodeDigit(sp / 10);
     d[3] = dispBawah.encodeDigit(sp % 10);
@@ -170,24 +198,33 @@ void updateDisplays() {
   }
 }
 
+// BUG FIX #6: saveNVS pakai mutex agar tidak race condition
 void saveNVS() {
+  float s1, s2, s3, kp, ki, kd;
+  xSemaphoreTake(xMutex, portMAX_DELAY);
+  s1 = g_sys.sp_pos1;
+  s2 = g_sys.sp_pos2;
+  s3 = g_sys.sp_pos3;
+  kp = g_sys.kp;
+  ki = g_sys.ki;
+  kd = g_sys.kd;
+  xSemaphoreGive(xMutex);
+
   Preferences p;
   p.begin("afr", false);
-  p.putFloat("sp1", g_sys.sp_pos1);
-  p.putFloat("sp2", g_sys.sp_pos2);
-  p.putFloat("sp3", g_sys.sp_pos3);
-  p.putFloat("pidkp", g_sys.kp);
-  p.putFloat("pidki", g_sys.ki);
-  p.putFloat("pidkd", g_sys.kd);
+  p.putFloat("sp1",   s1);
+  p.putFloat("sp2",   s2);
+  p.putFloat("sp3",   s3);
+  p.putFloat("pidkp", kp);
+  p.putFloat("pidki", ki);
+  p.putFloat("pidkd", kd);
   p.end();
   Serial.println("[NVS] saved");
 }
 
+// ==================== TASK RPM — EMA + Spike Rejection ====================
 void taskRPM(void* pv) {
-  float rpmBuf[5] = {0};
-  int idx = 0;
-  float total = 0;
-  int cnt = 0;
+  float rpm_filtered = 0.0f;
   while (true) {
     bool pulse;
     unsigned long interval;
@@ -199,66 +236,91 @@ void taskRPM(void* pv) {
     lastPulse = lastPulseMicros;
     interrupts();
     unsigned long now = micros();
-    if (now - lastPulse > 2000000) {
-      total = 0; idx = 0; cnt = 0;
-      for (int i = 0; i < 5; i++) rpmBuf[i] = 0;
-      SYS_WRITE(current_rpm, 0);
+    if (now - lastPulse > RPM_TIMEOUT_US) {
+      rpm_filtered = 0.0f;
     } else if (pulse && interval > 0) {
-      float raw = (60000000.0f / interval) / 5.0f;
-      total -= rpmBuf[idx];
-      rpmBuf[idx] = raw;
-      total += rpmBuf[idx];
-      idx = (idx + 1) % 5;
-      if (cnt < 5) cnt++;
-      float avg = total / cnt;
-      xSemaphoreTake(xMutex, portMAX_DELAY);
-      g_sys.current_rpm = avg;
-      g_sys.raw_rpm = raw;
-      xSemaphoreGive(xMutex);
+      float raw = (60000000.0f / interval) / (float)PULSE_PER_REV;
+      if (raw > RPM_SPIKE_CEIL) raw = rpm_filtered;
+      if (rpm_filtered < 1.0f) {
+        rpm_filtered = raw;
+      } else {
+        rpm_filtered = RPM_EMA_ALPHA * raw + (1.0f - RPM_EMA_ALPHA) * rpm_filtered;
+      }
     }
-    vTaskDelay(pdMS_TO_TICKS(1));
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+    g_sys.current_rpm = rpm_filtered;
+    g_sys.raw_rpm     = (pulse && interval > 0) ? (60000000.0f / interval) / (float)PULSE_PER_REV : 0;
+    xSemaphoreGive(xMutex);
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
+// ==================== TASK PID (DIPERBAIKI) ====================
 void taskPID(void* pv) {
-  float integral = 0;
-  float lastErr = 0;
+  float integral = 0.0f;
+  float lastErr  = 0.0f;
   unsigned long lastTime = 0;
+
   while (true) {
     SharedState snap;
     xSemaphoreTake(xMutex, portMAX_DELAY);
     snap = g_sys;
     xSemaphoreGive(xMutex);
 
+    // BUG FIX #5: Reset integral jika ada permintaan (start/stop)
+    if (snap.pid_reset_req) {
+      integral  = 0.0f;
+      lastErr   = 0.0f;
+      lastTime  = 0;
+      SYS_WRITE(pid_reset_req, false);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+
     if (snap.is_running) {
       unsigned long now = millis();
-      float dt = (now - lastTime) / 1000.0f;
-      if (lastTime == 0 || dt <= 0) dt = 0.15f;
+      float dt = (lastTime == 0) ? 0.1f : (float)(now - lastTime) / 1000.0f;
+      if (dt <= 0.0f || dt > 1.0f) dt = 0.1f;  // clamp dt
+
       float err = snap.setpoint - snap.current_rpm;
-      integral += err * dt;
-      if (integral > 200.0f) integral = 200.0f;
-      if (integral < -200.0f) integral = -200.0f;
+
+      // BUG FIX #1: Deadband — hentikan akumulasi integral jika sudah di dekat setpoint
+      // Ini mencegah integral terus naik setelah RPM tercapai.
+      if (fabsf(err) >= PID_DEADBAND_RPM) {
+        integral += snap.ki * err * dt;
+        // BUG FIX #4: Windup guard dengan limit yang masuk akal
+        if (integral > PID_INTEGRAL_MAX) integral = PID_INTEGRAL_MAX;
+        if (integral < PID_INTEGRAL_MIN) integral = PID_INTEGRAL_MIN;
+      }
+
       float deriv = (err - lastErr) / dt;
-      float base = (66.0f * snap.setpoint) + 530.0f;
-      float out = base + (snap.kp * err) + (snap.ki * integral) + (snap.kd * deriv);
-      if (out < 0) out = 0;
-      if (out > 5000) out = 5000;
-      uint8_t res = node.writeSingleRegister(REG_FREQ, (uint16_t)out);
+
+      // Rumus Base: 60 RPM = 50Hz (5000). Jadi 1 RPM = 83.33 unit.
+      // CATATAN: output modbus TIDAK diubah
+      float base = snap.setpoint * (5000.0f / 60.0f);
+      float out  = base + (snap.kp * err) + integral + (snap.kd * deriv);
+
+      if (out < 0.0f)    out = 0.0f;
+      if (out > 5000.0f) out = 5000.0f;
+
+      uint8_t res = modbusWriteRegister(REG_FREQ, (uint16_t)out);
+
       xSemaphoreTake(xMutex, portMAX_DELAY);
-      g_sys.pid_output = out;
+      g_sys.pid_output   = out;
       g_sys.vfd_freq_raw = (uint16_t)out;
-      g_sys.modbus_ok = (res == node.ku8MBSuccess);
+      g_sys.modbus_ok    = (res == node.ku8MBSuccess);
       xSemaphoreGive(xMutex);
-      Serial.printf("[PID] SP=%.1f RPM=%.1f err=%.2f out=%.0f mod=%s\n",
-        snap.setpoint, snap.current_rpm, err, out, res == node.ku8MBSuccess ? "OK" : "FAIL");
-      lastErr = err;
+
+      lastErr  = err;
       lastTime = now;
     } else {
+      // Motor berhenti: reset semua state PID
+      integral = 0.0f;
+      lastErr  = 0.0f;
       lastTime = 0;
-      integral = 0;
-      lastErr = 0;
     }
-    vTaskDelay(pdMS_TO_TICKS(150));
+
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -267,12 +329,13 @@ void taskUI(void* pv) {
   bool debouncing = false;
   unsigned long debounceStart = 0;
   unsigned long lastDisp = 0;
+
   while (true) {
     SYS_WRITE(uptime_ms, millis());
 
     int btn = digitalRead(BTN_PIN);
     if (btn == LOW && lastBtn == HIGH && !debouncing) {
-      debouncing = true;
+      debouncing    = true;
       debounceStart = millis();
     }
     lastBtn = btn;
@@ -285,9 +348,9 @@ void taskUI(void* pv) {
     }
 
     if (!SYS_READ(is_running)) {
-      float sp = SYS_READ(setpoint);
-      bool chg = false;
-      if (digitalRead(ROT1_PIN) == LOW) { sp = SYS_READ(sp_pos1); chg = true; }
+      float sp  = SYS_READ(setpoint);
+      bool  chg = false;
+      if      (digitalRead(ROT1_PIN) == LOW) { sp = SYS_READ(sp_pos1); chg = true; }
       else if (digitalRead(ROT2_PIN) == LOW) { sp = SYS_READ(sp_pos2); chg = true; }
       else if (digitalRead(ROT3_PIN) == LOW) { sp = SYS_READ(sp_pos3); chg = true; }
       if (chg) SYS_WRITE(setpoint, sp);
@@ -303,60 +366,59 @@ void taskUI(void* pv) {
   }
 }
 
-void taskWebSvr(void* pv) {
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-}
-
 void handleStatus(AsyncWebServerRequest* r) {
   JsonDocument doc;
   xSemaphoreTake(xMutex, portMAX_DELAY);
-  doc["is_running"] = g_sys.is_running;
-  doc["current_rpm"] = g_sys.current_rpm;
-  doc["setpoint"] = g_sys.setpoint;
-  doc["sp_pos1"] = g_sys.sp_pos1;
-  doc["sp_pos2"] = g_sys.sp_pos2;
-  doc["sp_pos3"] = g_sys.sp_pos3;
-  doc["pid_output"] = g_sys.pid_output;
+  doc["is_running"]   = g_sys.is_running;
+  doc["current_rpm"]  = g_sys.current_rpm;
+  doc["setpoint"]     = g_sys.setpoint;
+  doc["sp_pos1"]      = g_sys.sp_pos1;
+  doc["sp_pos2"]      = g_sys.sp_pos2;
+  doc["sp_pos3"]      = g_sys.sp_pos3;
+  doc["pid_output"]   = g_sys.pid_output;
   doc["vfd_freq_raw"] = g_sys.vfd_freq_raw;
-  doc["modbus_ok"] = g_sys.modbus_ok;
-  doc["kp"] = g_sys.kp;
-  doc["ki"] = g_sys.ki;
-  doc["kd"] = g_sys.kd;
-  doc["uptime_ms"] = g_sys.uptime_ms;
-  doc["heap"] = ESP.getFreeHeap();
+  doc["modbus_ok"]    = g_sys.modbus_ok;
+  doc["kp"]           = g_sys.kp;
+  doc["ki"]           = g_sys.ki;
+  doc["kd"]           = g_sys.kd;
+  doc["uptime_ms"]    = g_sys.uptime_ms;
+  doc["heap"]         = ESP.getFreeHeap();
   xSemaphoreGive(xMutex);
   String resp;
   serializeJson(doc, resp);
   r->send(200, "application/json", resp);
 }
 
-void handleStart(AsyncWebServerRequest* r) {
-  startSystem();
-  r->redirect("/");
-}
-
-void handleStop(AsyncWebServerRequest* r) {
-  stopSystem();
-  r->redirect("/");
-}
-
 void handleSetpoint(AsyncWebServerRequest* r) {
+  JsonDocument doc;
   if (r->hasParam("pos") && r->hasParam("value")) {
-    int pos = r->getParam("pos")->value().toInt();
+    int   pos = r->getParam("pos")->value().toInt();
     float val = r->getParam("value")->value().toFloat();
+    if (val < 10.0f)  val = 10.0f;
+    if (val > 100.0f) val = 100.0f;
     xSemaphoreTake(xMutex, portMAX_DELAY);
-    if (pos == 1) g_sys.sp_pos1 = val;
+    if      (pos == 1) g_sys.sp_pos1 = val;
     else if (pos == 2) g_sys.sp_pos2 = val;
     else if (pos == 3) g_sys.sp_pos3 = val;
     xSemaphoreGive(xMutex);
     saveNVS();
+    doc["status"] = "ok";
+    doc["pos"]    = pos;
+    doc["value"]  = val;
+    String resp;
+    serializeJson(doc, resp);
+    r->send(200, "application/json", resp);
+  } else {
+    doc["status"]  = "error";
+    doc["message"] = "missing pos or value";
+    String resp;
+    serializeJson(doc, resp);
+    r->send(400, "application/json", resp);
   }
-  r->redirect("/");
 }
 
 void handlePID(AsyncWebServerRequest* r) {
+  JsonDocument doc;
   if (r->hasParam("kp") && r->hasParam("ki") && r->hasParam("kd")) {
     xSemaphoreTake(xMutex, portMAX_DELAY);
     g_sys.kp = r->getParam("kp")->value().toFloat();
@@ -364,8 +426,38 @@ void handlePID(AsyncWebServerRequest* r) {
     g_sys.kd = r->getParam("kd")->value().toFloat();
     xSemaphoreGive(xMutex);
     saveNVS();
+    doc["status"] = "ok";
+    doc["kp"]     = g_sys.kp;
+    doc["ki"]     = g_sys.ki;
+    doc["kd"]     = g_sys.kd;
+    String resp;
+    serializeJson(doc, resp);
+    r->send(200, "application/json", resp);
+  } else {
+    doc["status"]  = "error";
+    doc["message"] = "missing kp, ki, or kd";
+    String resp;
+    serializeJson(doc, resp);
+    r->send(400, "application/json", resp);
   }
-  r->redirect("/");
+}
+
+void handleStart(AsyncWebServerRequest* r) {
+  JsonDocument doc;
+  startSystem();
+  doc["status"] = "ok";
+  String resp;
+  serializeJson(doc, resp);
+  r->send(200, "application/json", resp);
+}
+
+void handleStop(AsyncWebServerRequest* r) {
+  JsonDocument doc;
+  stopSystem();
+  doc["status"] = "ok";
+  String resp;
+  serializeJson(doc, resp);
+  r->send(200, "application/json", resp);
 }
 
 void handleRestart(AsyncWebServerRequest* r) {
@@ -376,12 +468,12 @@ void handleRestart(AsyncWebServerRequest* r) {
 
 void setupRoutes() {
   server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-  server.on("/api/status", HTTP_GET, handleStatus);
-  server.on("/api/start", HTTP_GET, handleStart);
-  server.on("/api/stop", HTTP_GET, handleStop);
+  server.on("/api/status",   HTTP_GET, handleStatus);
+  server.on("/api/start",    HTTP_GET, handleStart);
+  server.on("/api/stop",     HTTP_GET, handleStop);
   server.on("/api/setpoint", HTTP_GET, handleSetpoint);
-  server.on("/api/pid", HTTP_GET, handlePID);
-  server.on("/api/restart", HTTP_GET, handleRestart);
+  server.on("/api/pid",      HTTP_GET, handlePID);
+  server.on("/api/restart",  HTTP_GET, handleRestart);
 }
 
 void showDebugSegments(const char* name, const uint8_t* segsTop, const uint8_t* segsBot) {
@@ -396,39 +488,41 @@ void setup() {
   delay(500);
   Serial.println("\n[INIT] AFR booting...");
 
-  xMutex = xSemaphoreCreateMutex();
+  xMutex       = xSemaphoreCreateMutex();
+  xMutexModbus = xSemaphoreCreateMutex();
 
   dispAtas.setBrightness(7);
   dispBawah.setBrightness(7);
 
-  uint8_t dash[] = {0x40, 0x40, 0x40, 0x40};
+  uint8_t dash[]  = {0x40, 0x40, 0x40, 0x40};
   uint8_t blank[] = {0, 0, 0, 0};
   showDebugSegments("GPIO init", dash, dash);
 
   {
     Preferences p;
     p.begin("afr", true);
-    g_sys.sp_pos1 = p.getFloat("sp1", SP1_DEF);
-    g_sys.sp_pos2 = p.getFloat("sp2", SP2_DEF);
-    g_sys.sp_pos3 = p.getFloat("sp3", SP3_DEF);
-    g_sys.kp = p.getFloat("pidkp", KP_DEF);
-    g_sys.ki = p.getFloat("pidki", KI_DEF);
-    g_sys.kd = p.getFloat("pidkd", KD_DEF);
+    g_sys.sp_pos1 = p.getFloat("sp1",   SP1_DEF);
+    g_sys.sp_pos2 = p.getFloat("sp2",   SP2_DEF);
+    g_sys.sp_pos3 = p.getFloat("sp3",   SP3_DEF);
+    g_sys.kp      = p.getFloat("pidkp", KP_DEF);
+    g_sys.ki      = p.getFloat("pidki", KI_DEF);
+    g_sys.kd      = p.getFloat("pidkd", KD_DEF);
     p.end();
   }
-  g_sys.setpoint = g_sys.sp_pos2;
-  g_sys.is_running = false;
-  g_sys.transition_run = false;
-  g_sys.modbus_ok = false;
+  g_sys.setpoint          = g_sys.sp_pos2;
+  g_sys.is_running        = false;
+  g_sys.transition_run    = false;
+  g_sys.modbus_ok         = false;
+  g_sys.pid_reset_req     = false;   // BUG FIX #5: init flag
 
   uint8_t nus[] = {0x54, 0x3E, 0x6D, 0x00};
   showDebugSegments("NVS loaded", blank, nus);
 
-  pinMode(BTN_PIN, INPUT_PULLUP);
-  pinMode(ENCODER_PIN, INPUT_PULLUP);
-  pinMode(ROT1_PIN, INPUT_PULLUP);
-  pinMode(ROT2_PIN, INPUT);
-  pinMode(ROT3_PIN, INPUT);
+  pinMode(BTN_PIN,      INPUT_PULLUP);
+  pinMode(ENCODER_PIN,  INPUT_PULLUP);
+  pinMode(ROT1_PIN,     INPUT_PULLUP);
+  pinMode(ROT2_PIN,     INPUT);
+  pinMode(ROT3_PIN,     INPUT);
   pinMode(MAX485_DE_RE, OUTPUT);
   digitalWrite(MAX485_DE_RE, LOW);
   pinMode(LED_PIN, OUTPUT);
@@ -441,7 +535,7 @@ void setup() {
   node.preTransmission(preTransmission);
   node.postTransmission(postTransmission);
 
-  uint8_t res = node.writeSingleRegister(REG_FREQ, 0);
+  uint8_t res = modbusWriteRegister(REG_FREQ, 0);
   g_sys.modbus_ok = (res == node.ku8MBSuccess);
   Serial.printf("[MODBUS] Init test: %s\n", g_sys.modbus_ok ? "OK" : "FAIL");
 
@@ -462,34 +556,21 @@ void setup() {
   unsigned long wifiStart = millis();
   bool wifiOk = false;
   while (millis() - wifiStart < WIFI_TIMEOUT) {
-    if (WiFi.status() == WL_CONNECTED) {
-      wifiOk = true;
-      break;
-    }
+    if (WiFi.status() == WL_CONNECTED) { wifiOk = true; break; }
     delay(200);
     Serial.print(".");
   }
   Serial.println();
 
+  uint8_t wifiSeg[] = {0x1C, 0x06, 0x71, 0x06};
   if (wifiOk) {
-    IPAddress ip = WiFi.localIP();
-    Serial.printf("[WIFI] Connected: %s\n", ip.toString().c_str());
-    uint8_t ipTop[4], ipBot[4];
-    ipTop[0] = dispAtas.encodeDigit(ip[0] / 100);
-    ipTop[1] = dispAtas.encodeDigit((ip[0] / 10) % 10);
-    ipTop[2] = dispAtas.encodeDigit(ip[0] % 10);
-    ipTop[3] = 0x00;
-    ipBot[0] = dispBawah.encodeDigit(ip[1] / 100);
-    ipBot[1] = dispBawah.encodeDigit((ip[1] / 10) % 10);
-    ipBot[2] = dispBawah.encodeDigit(ip[1] % 10);
-    ipBot[3] = 0x00;
-    dispAtas.setSegments(ipTop);
-    dispBawah.setSegments(ipBot);
-    delay(1500);
+    Serial.printf("[WIFI] Connected: %s\n", WiFi.localIP().toString().c_str());
+    uint8_t rddy[] = {0x50, 0x5C, 0x6E, 0x00};
+    showDebugSegments("WiFi connected", wifiSeg, rddy);
   } else {
     Serial.println("[WIFI] Failed, continuing without network");
-    uint8_t errw[] = {0x79, 0x50, 0x50, 0x00};
-    showDebugSegments("WiFi failed", errw, wifi);
+    uint8_t fail[] = {0x71, 0x77, 0x38, 0x38};
+    showDebugSegments("WiFi failed", wifiSeg, fail);
   }
 
   if (wifiOk) {
@@ -518,8 +599,7 @@ void setup() {
 
   xTaskCreatePinnedToCore(taskRPM, "RPM", 2048, NULL, 5, NULL, 1);
   xTaskCreatePinnedToCore(taskPID, "PID", 4096, NULL, 4, NULL, 1);
-  xTaskCreatePinnedToCore(taskUI, "UI", 4096, NULL, 3, NULL, 0);
-  xTaskCreatePinnedToCore(taskWebSvr, "WEB", 2048, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(taskUI,  "UI",  4096, NULL, 3, NULL, 0);
 
   Serial.println("[INIT] All tasks created, system ready");
 }
