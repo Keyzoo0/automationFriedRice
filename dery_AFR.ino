@@ -51,8 +51,8 @@
 // BUG FIX #4: Integral windup limit disesuaikan.
 // Maks output = 5000. Base pada SP=30 sudah ~2500.
 // Sisa untuk integral = 2500. Margin ±500 cukup untuk koreksi.
-#define PID_INTEGRAL_MAX   500.0f
-#define PID_INTEGRAL_MIN  -500.0f
+#define PID_INTEGRAL_MAX   100.0f
+#define PID_INTEGRAL_MIN  -100.0f
 
 // BUG FIX #1: Deadband — jika |error| < nilai ini, integral BERHENTI akumulasi.
 // Mencegah integral terus naik setelah setpoint tercapai.
@@ -95,7 +95,7 @@ static volatile bool          adaPulsa        = false;
 void IRAM_ATTR readRPM() {
   unsigned long now  = micros();
   unsigned long diff = now - lastPulseMicros;
-  if (diff > 300000) {
+  if (diff > 250000) {
     intervalValid  = diff;
     lastPulseMicros = now;
     adaPulsa       = true;

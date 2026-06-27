@@ -41,7 +41,7 @@ Sistem kontrol kecepatan motor berbasis **PID** untuk pengadukan blondo (ampas k
 | Fitur | Detail |
 |---|---|
 | Kontrol PID | Kp=0.23, Ki=0.30, Kd=21.4 (tunable via web) |
-| Anti-windup | Integral clamp ±200 |
+| Anti-windup | Integral clamp ±100 |
 | Base frequency | `(66 × SP) + 530` sebagai feedforward |
 | 3 Preset Speed | Rotary switch: 20 / 25 / 30 RPM (configurable) |
 | Dual Display | ATAS: setpoint/status, BAWAH: RPM aktual |
@@ -269,7 +269,7 @@ atau       http://<IP_ESP32>
 ### Default Parameters
 ```
 Kp = 0.23   (proportional)
-Ki = 0.30   (integral, clamp ±200)
+Ki = 0.30   (integral, clamp ±100)
 Kd = 21.4   (derivative)
 baseFreq = (66 × SP) + 530
 ```
